@@ -1,0 +1,8 @@
+﻿.pio/
+.vscode/
+*.zip
+*.hex
+*.bin
+*.elf
+*.bak
+tools/_err.txt
