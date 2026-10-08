@@ -1,0 +1,186 @@
+// =====================================================================
+//  config.h  -  global pins, screen geometry, palette and tunables
+// =====================================================================
+#pragma once
+#include <Arduino.h>
+
+// ---------------- firmware identity ----------------
+#define FW_NAME    "ESP32 Pixel Pet"
+#define FW_VERSION "1.0.0"
+
+// ---------------- UI back-end selection ----------------
+// 1 = new LVGL v8 interface (src/app_lvgl.cpp): the animated face is shown
+//     through an lv_canvas widget and the rest of the UI is built from LVGL
+//     widgets, flushed through a 160x40 px draw buffer;
+// 0 = original immediate-mode TFT_eSPI interface (src/main.cpp).
+// Exactly one of the two files provides setup()/loop().
+#define USE_LVGL 1
+
+// Byte order of the EyeEngine's off-screen RGB565 sprite buffer:
+//   1 = swap the two bytes of every pixel (the ST7735 panel wants the high
+//       byte first, which is what TFT_eSPI does when it pushes the sprite);
+//   0 = native little-endian, i.e. what LVGL's canvas and draw buffer expect.
+#define SPRITE_SWAP_BYTES (USE_LVGL ? 0 : 1)
+
+// Verification switch for the LVGL UI: with 1, setup() renders every screen once
+// (a few frames each) and then plays one care action of each kind (feed / wash /
+// medicine, see careaction.h), printing "[ui] sweep n/12 ok" and
+// "[ui] care demo n/3 ok" as it goes; it also confirms that every menu icon
+// really is inside montserrat_14 ("[ui] menu icons 11/11 ok"). The pet state is
+// restored afterwards, so the test neither feeds nor punishes it for real. A page that does not fit in
+// LVGL's memory or that trips over its own draw calls then fails in the boot log
+// instead of the first time a user walks into it. Costs ~2 s of extra boot time;
+// leave 0 for normal use.
+#define UI_SWEEP 0
+
+// ---------------- buttons (6 keys) ----------------
+#define BTN_UP    2
+#define BTN_DOWN  13
+#define BTN_LEFT  27
+#define BTN_RIGHT 35   // input only
+#define BTN_A     34   // input only
+#define BTN_B     12   // strapping pin - keep LOW at boot
+#define BTN_COUNT 6
+
+// Active level of the keys.
+//   0 = keys pull the pin toward GND when pressed; pins idle HIGH (INPUT_PULLUP)
+//       <-- this board uses GND/active-LOW buttons.
+//   1 = keys pull the pin toward 3.3V when pressed; pins idle LOW (INPUT_PULLDOWN).
+// BTN_AUTO_POLARITY still learns each pin's real idle level, so pins 34/35
+// (which have no internal pull) work in either case.
+#define BTN_PRESSED_HIGH 0
+// Auto-detect the idle level at boot: if most keys read "pressed" right
+// after power-up the polarity is flipped automatically. Handy when you are
+// not sure whether your buttons pull up or pull down. Set 0 to force the
+// compile-time BTN_PRESSED_HIGH setting.
+#define BTN_AUTO_POLARITY 1
+// Print the pressed keys to Serial once a second (debug wiring). 0 to disable.
+#define BTN_DEBUG 1
+#define BTN_DEBOUNCE_MS  25
+#define BTN_LONGPRESS_MS 650
+
+// ---------------- buzzer (passive, PWM/LEDC) ----------------
+#define BUZZER_PIN 14
+
+// ---------------- sensors (ADC1) ----------------
+#define LDR_PIN 36   // light  (ADC1_CH0)
+#define NTC_PIN 39   // thermistor temperature (ADC1_CH3)
+
+// "Cover me" gesture detection (see sensors.cpp / sensorsCoverEvent()).
+// A hand cupped over the sensors drives the LDR to (near) zero. Measured on the
+// bench: idle reads 27..31 % (raw 1100..1250) while a cupped hand reads 0..2 %
+// (raw 19..161), so the absolute dark test below has roughly a 10x margin and is
+// what really does the detecting. The temperature side is only a *secondary*
+// condition: the NTC hardly reacts to a hand (its raw value moves < 10 counts
+// while the LDR collapses) and the slow reference lags ordinary ambient drift, so
+// "rise" sits at 0.1..0.4 C even with no hand present. It never blocks a genuine
+// cover - keep it, but do not expect it to tell a hand from a passing shadow.
+// sensorsCoverEvent() fires once per cover, which the pet answers with "好舒服啊".
+#define COVER_AMB_DECAY  0.01f // ambient light baseline decay per sample (~10 s; it snaps UP at once)
+#define COVER_DARK_PCT   3     // "hand over the LDR": it reads (near) zero, <= this many %
+#define COVER_REARM     80     // ... and light must climb back above this % of ambient to re-arm
+#define COVER_RISE_DECI  1     // ... and temp climbs >= this (deci-°C, 1 = 0.1 C) above reference
+#define COVER_HOLD_MS  400     // ... hold at least this long before firing
+#define COVER_DEBUG      0     // print the detector state to Serial ~1/s (0 to silence)
+
+// ---------------- reserved buses ----------------
+#define I2C_SCL_PIN 15
+#define I2C_SDA_PIN 21
+
+// ---------------- microSD (shares the TFT SPI bus) ----------------
+#define SD_CS_PIN 22
+#define USE_SD    0     // set to 1 to enable save/load of the pet on the SD card
+
+// ---------------- display geometry ----------------
+// 1.8" ST7735 128x160 panel (no touch).
+// SCR_ROTATION: 0 / 2 = portrait  (128 x 160)
+//               1 / 3 = landscape (160 x 128)  -> panel rotated -90 / +90
+// 1 gives the clockwise landscape, 3 the counter-clockwise one. If the
+// picture is upside-down, just swap the value between 1 and 3 (or 0/2).
+// 3 = landscape rotated 90° counter-clockwise (the "-90" orientation).
+// Swap to 1 if you need the opposite landscape (90° clockwise).
+#define SCR_ROTATION 3
+
+#if (SCR_ROTATION == 1 || SCR_ROTATION == 3)
+  #define SCR_LANDSCAPE 1
+#else
+  #define SCR_LANDSCAPE 0
+#endif
+
+#if SCR_LANDSCAPE
+  #define SCR_W   160
+  #define SCR_H   128
+  #define FACE_H  64                  // animated eye / face area (top)
+#else
+  #define SCR_W   128
+  #define SCR_H   160
+  #define FACE_H  88
+#endif
+
+#define FACE_W  SCR_W                 // eye / face sprite is full width
+// Height of the *scene* the pet sprite paints. The artwork is authored for
+// FACE_H (see FSCY() in eyes.cpp) and stays that size - the extra rows below it
+// are the continuing background the status HUD floats on, which is what makes
+// the pet scene fill the whole panel instead of stopping halfway down.
+#define PET_H   SCR_H
+#define STATUS_Y FACE_H
+#define STATUS_H (SCR_H - FACE_H)     // status / menu area (bottom)
+
+// ---------------- colour helpers ----------------
+#define RGB565(r,g,b) ((uint16_t)((((r)&0xF8)<<8)|(((g)&0xFC)<<3)|((b)>>3)))
+
+#define COL_BG       RGB565(8,10,20)
+#define COL_FACE_BG  RGB565(14,20,40)
+#define COL_PANEL    RGB565(24,30,52)
+#define COL_PANEL2   RGB565(38,46,76)
+#define COL_TEXT     0xFFFF
+#define COL_DIM      RGB565(150,162,196)
+#define COL_ACCENT   RGB565(0,200,255)
+#define COL_GOOD     RGB565(60,220,90)
+#define COL_WARN     RGB565(255,190,40)
+#define COL_BAD      RGB565(255,70,60)
+
+// eyes
+#define COL_SCLERA   0xFFFF
+#define COL_IRIS     RGB565(60,190,255)
+#define COL_IRIS2    RGB565(20,110,230)
+#define COL_PUPIL    RGB565(6,8,16)
+#define COL_OUTLINE  RGB565(6,8,18)
+#define COL_MOUTH    0xFFFF
+#define COL_BROW     RGB565(120,180,255)
+#define COL_LOVE     RGB565(255,70,120)
+#define COL_ANGRY    RGB565(255,70,50)
+#define COL_HAPPY    RGB565(70,220,255)
+#define COL_SICK     RGB565(150,220,90)
+#define COL_DEAD     RGB565(120,120,130)
+
+// ---------------- game / behaviour tunables ----------------
+// Stats are updated every PET_TICK_MS. Instead of dropping one point *per tick*
+// (which emptied a full bar in ~3 minutes) each stat now drops one point every
+// *_PERIOD_TICKS ticks, so a full bar lasts a sensible while.
+// Time for a bar to fall 100 -> 0 = PERIOD_TICKS * PET_TICK_MS * 100.
+#define PET_TICK_MS   2000UL   // base stats tick (2 s)
+
+#define HUNGER_PERIOD_TICKS  48   // -1 every 96 s   -> ~2.7 h from full
+#define HAPPY_PERIOD_TICKS   60   // -1 every 120 s  -> ~3.3 h from full
+#define ENERGY_PERIOD_TICKS  56   // -1 every 112 s  -> ~3.1 h from full
+#define CLEAN_PERIOD_TICKS   180  // -1 every 360 s  -> ~10 h from clean
+#define HEALTH_PERIOD_TICKS  60   // health drifts 1 step every 120 s
+
+#define ENERGY_SLEEP_GAIN     3   // energy regained per tick while asleep
+
+// The pet occasionally "says" something: a small speech bubble over the face.
+// The next chit-chat is scheduled at a random time inside this window.
+// Set PET_TALK_MAX_MS to 0 to switch the idle chatter off.
+#define PET_TALK_MIN_MS 18000UL   // earliest next talk (18 s)
+#define PET_TALK_MAX_MS 42000UL   // latest   next talk (42 s)
+
+#define PET_AUTOSAVE_MS 60000UL   // write the pet to NVS every minute (0 = only on events)
+
+// A care action (feed / wash / medicine) is played in three beats: the pet first
+// *performs* the action, only then is the stat applied, and only then does it show
+// what it thought about it (see careaction.h). This is the length of beat 1, the
+// little animation drawn over the face. Keep it shorter than the speech bubble
+// that beat 3 shows, otherwise the bubble is gone while the pet still chews.
+// ~0.6 s reads as "it did something" without feeling slow.
+#define CARE_ANIM_MS 650UL
