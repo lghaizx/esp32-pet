@@ -25,7 +25,11 @@
   再按真实结果给表情和台词（吃饱了会拒绝、睡着时会「睡着了」），详见「照顾动作：先动画，后加值」。
 - **小游戏**：「接食物」——水果/糖果加分，石头扣命，3 条命。
 - **音乐**：欢乐颂、小星星、生日快乐（无源蜂鸣器演奏）。
-- **WiFi 配网**：打开「网络」菜单会开一个软 AP，用手机连上后可在浏览器里改**话术、对话间隔、表情变化间隔、成长速度**，保存即时生效。
+- **WiFi 配网**：打开「网络」菜单会开一个软 AP，用手机连上后可在浏览器里改**话术、对话间隔、表情变化间隔、成长速度**，保存即时生效；
+  同一个页面还能**上传开机图片**（选图后手机先把图缩到 160×128，再传给宠物）。
+- **开机图**：上电先显示一张全屏图片（默认是宠物脸 + `ESP32` / `PIXEL PET` 字标），约 1.5 秒后进入欢迎页，再进入主界面；
+  按 **A/B** 可跳过。图片可以**用手机上传**（存进 Flash，优先于内置图，可随时删掉换回默认），
+  也可以由 `tools/gen_splash.ps1` 生成并编进固件（见「开机图」）。
 - **掉电保存**：宠物状态和设置都存进 ESP32 的 NVS（Flash）。
 
 ---
@@ -108,6 +112,7 @@ include/
   lv_port.h       LVGL <-> TFT_eSPI 桥接
   settings.h      NVS 持久化的用户参数 PetCfg
   netconfig.h     软 AP + 设置网页
+  splash.h        开机图片：位图 / 上传图接口
 
 src/
   app_lvgl.cpp    LVGL 界面（12 个屏幕）+ LVGL 版 setup()/loop()
@@ -125,13 +130,17 @@ src/
   lv_font_cn.c    【生成】LVGL 中文字体
   lv_port.cpp     LVGL 移植层
   settings.cpp    PetCfg 默认值 / 读写 / 话术池
-  netconfig.cpp   软 AP + WebServer 配置页
+  netconfig.cpp   软 AP + WebServer 配置页（含开机图上传）
+  splash.cpp      开机图片的显示 + 上传图的读写（两套 UI 共用）
+  splash_data.cpp 【生成】开机图片位图 160×128 RGB565
 
 tools/
   gen_cnfont.ps1       扫描源码生成 src/cnfont_data.cpp
   gen_lvgl_font.ps1    扫描源码生成 src/lv_font_cn.c
+  gen_splash.ps1       生成 src/splash_data.cpp（开机图片，可 -Image 换成自己的图）
   dump_lvgl_glyph.ps1  反查生成字体里某个字的点阵（调试）
   read_serial.py       [COMx] [秒] 复位并从启动日志开始读串口（默认 6 秒）
+  _diag_page.js        把设置页里的 JS 抽出来跑（缩放几何 / RGB565 字节序 / 留边色）
 ```
 
 > 根目录里的 `LVGL前.zip` / `LVGL后.zip` 是历史备份，不参与编译。
@@ -200,7 +209,47 @@ powershell -ExecutionPolicy Bypass -File tools/gen_lvgl_font.ps1   # -> src/lv_f
 
 ## 操作说明
 
+### 开机图
+上电后先显示一张 160×128 的**全屏图片**（[`src/splash_data.cpp`](src/splash_data.cpp) 里的位图，由 `tools/gen_splash.ps1` 生成），
+停留 `SPLASH_MS`（默认 1500 ms，按 **A/B** 直接跳过），然后 LVGL 的第一帧把它整个覆盖成下面的欢迎页——
+所以开机顺序是 **开机图 → 欢迎页 → 主界面**。它由 `setup()` 在 `tft.init()` 之后、LVGL 启动之前用
+TFT_eSPI 的 `pushImage()` 直接推到屏上（`src/splash.cpp`），因此**不占 LVGL 内存池**，两套 UI 表现一致。
+
+- **换成自己的图**（PNG/JPG/BMP 都行，GDI+ 能读的都可以）：
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File tools/gen_splash.ps1 -Image C:\logo.png
+  ```
+  也可以把图存成 `tools\splash.png` 后**直接跑脚本**（不带参数）。脚本会按 `-Fit cover`（默认，铺满并裁掉多余）
+  缩放；想留边不裁切用 `-Fit contain`。**跑完重新编译烧录**才会生效。
+- **不传图片时**，脚本会画一张内置图案（宠物脸 + `ESP32` / `PIXEL PET` 字标），所以仓库里不必存图片文件。
+- **代价**：位图是**编译进固件**的，占 `160×128×2 = 40 KB` flash（app 槽 1.25 MB，加完约 87%）。
+  不想要就把 [`config.h`](include/config.h) 的 `USE_SPLASH` 设为 `0`，位图整段被裁掉，开机直接进欢迎页。
+- **像素对齐**：位图按面板横向布局（`SPLASH_W/H` 必须等于 `SCR_W/SCR_H`），`splash_data.cpp` 里有 `static_assert` 守着，
+  改屏幕几何忘了改这里会**编译报错**而不是画面错位。
+
+#### 用手机上传自己的开机图（不用重烧固件）
+菜单 → **网络** → 手机浏览器打开 `http://192.168.4.1` → 页面底部「**开机图片**」→ 选图 → **上传为开机图片**。
+
+- **缩放发生在手机里**：页面用 `<canvas>` 把选中的图缩到 160×128、转成 RGB565 的 **40960 字节**再上传，
+  所以原图（哪怕 4000×3000）根本不走 WiFi，宠物这边也不需要解码器和它的内存。
+  缩小时按 2× 逐次减半再走最后一档（一次从 4000 px 直接缩到 160 px 会糊）。
+- **铺满 / 完整显示**：与脚本的 `-Fit cover|contain` 一一对应（`cover` 裁掉多出来的边，`contain` 四周留底色 `COL_BG`）。
+- **存哪儿**：写进 **`spiffs` 分区**（默认分区表里 `0x290000` 起的 1.4 MB，一直没人用）的 `/splash.bin`，由 LittleFS 管理，
+  首次挂载时格式化这一块。**app 槽、OTA 槽和 NVS 设置都不动**，所以「上传图片」和「烧固件」互不影响。
+  想要的话 `pio run -t uploadfs` 写的也是同一块（`data/` 目录，文件得是同样的裸 RGB565）。
+- **生效时间**：图片只在**开机时**显示；上传完页面里有「**重启宠物**」按钮直接重启它（热点会断开），也可以按 RST。
+  上传的图**优先于**编进固件的内置图。
+- **改回默认**：页面里「**删掉它，恢复默认图**」。
+- **代价**：上传功能要带 LittleFS，约 **+49 KB** flash（90.6%）。把 [`include/config.h`](include/config.h) 的
+  `USE_SPLASH_UPLOAD` 设为 `0` 就整段去掉（回到 86.8%），页面里也不再出现这一栏。
+- **为什么不直接 POST 原始 body**：core 的 `WebServer` 对**非表单** body 会先整段读成一个 `String`（遇到 `0x00` 还会截断），
+  位图根本不能走那条路；上传因此用 `multipart/form-data`——core 里唯一会**流式**回调的形式，每 1436 字节写一次 Flash，
+  40 KB 图片不会整块进 RAM。
+- **自检**：`node tools/_diag_page.js` 把页面里那段 JS 抽出来喂给桩 canvas 跑，检查缩放几何、
+  RGB565 的字节序（低位在前）以及留边色是否和 PC 端脚本一致。
+
 ### 欢迎页
+- 第一行是**开机标题**、第二行是**问候语**（在 WiFi 页面里改，见「WiFi 配网」）；两者都在开机图之后显示。
 - 按 **A** 或 **B** 进入（停留超过 6 秒也会自动进入）。
 
 ### 主界面（脸）
@@ -326,7 +375,9 @@ powershell -ExecutionPolicy Bypass -File tools/gen_lvgl_font.ps1   # -> src/lv_f
 1. 手机 WiFi 连接热点：**`ESP32-Pet-XXXX`**（XXXX 取自芯片 MAC，唯一）
 2. 密码：**`pet12345`**
 3. 浏览器打开：**`http://192.168.4.1`**
-4. 在页面里设置，点 **保存** —— 立即生效，无需重启：
+4. 在页面里设置，点 **保存**：话术 / 间隔 / 成长速度**立即生效**，
+   开机标题 / 问候语在**下次开机**显示（先显示**开机图**，再显示这两行，见「开机图」）。
+5. 页面底部的「**开机图片**」可以直接选图上传（同样见「开机图」），旁边还有「重启宠物」和「恢复默认图」。
 
 | 项目 | 说明 |
 |------|------|
@@ -334,11 +385,15 @@ powershell -ExecutionPolicy Bypass -File tools/gen_lvgl_font.ps1   # -> src/lv_f
 | **对话间隔（秒）** | 主动说话的间隔范围（最短~最长）。 |
 | **表情变化间隔（秒）** | 表情「小动作」的间隔范围（越小越活泼）。 |
 | **成长速度** | 20~400%，100 为正常（1 龄分钟 = 1 真实分钟），数值越大长得越快。 |
+| **开机标题** | 欢迎屏第一行，只能填**英文/数字**（最多 16 字符，留空恢复默认 `ESP32 Pixel Pet`）。 |
+| **开机问候语** | 欢迎屏第二行，从 5 句内置中文问候语里选一句；「关闭」则显示版本号。 |
+| **开机图片** | 手机选图 → 页面先缩成 160×128 → 上传到 Flash，开机优先显示（可铺满/完整显示，可一键恢复默认图）。 |
 
 设置项存进 NVS 的 `cfg` 命名空间，掉电不丢。
 
-> **为什么话术是「勾选」而不是自由输入？**
-> 因为中文字体是**编译期烘焙**的，运行时你手打的字没有任何点阵可以显示。所以内置了 24 句话术字面量（脚本会把它们的字全部打进字库），用户通过勾选来「增/减」。
+> **为什么话术是「勾选」、开机标题只能填英文？**
+> 因为中文字体是**编译期烘焙**的，运行时你手打的字没有任何点阵可以显示。所以内置了 24 句话术字面量（脚本会把它们的字全部打进字库），用户通过勾选来「增/减」；开机标题因此只收英文/数字，中文改用内置的**开机问候语**（同样是字面量，字已被烘进字库）。
+> 改了 `settings.cpp` 的 `BOOT_LINES[]` 问候语内容后，**记得重跑两个字体脚本**再编译。
 >
 > **省电**：软 AP **只在「网络」这一屏显示时**开启，按 **B/A** 退出该屏会立刻关掉无线，正常使用时射频是关闭的。
 
@@ -351,6 +406,9 @@ powershell -ExecutionPolicy Bypass -File tools/gen_lvgl_font.ps1   # -> src/lv_f
 - 屏幕旋转 `SCR_ROTATION`、几何、调色板
 - 行为数值：`PET_TICK_MS`、各项 `*_PERIOD_TICKS`、`PET_TALK_MIN/MAX_MS`、`PET_AUTOSAVE_MS`
 - 照顾动作动画时长 `CARE_ANIM_MS`（默认 650 ms，见「照顾动作：先动画，后加值」）
+- 开机图片 `USE_SPLASH` / `SPLASH_MS`（默认开、1500 ms，按 A/B 跳过；见「开机图」）
+- 开机图上传 `USE_SPLASH_UPLOAD`（默认开，带 LittleFS，约 +49 KB flash）、
+  `SPLASH_STRIP_ROWS`（每批推几行，默认 16 = 5 KB RAM，见「开机图」）
 - `USE_LVGL` 切 UI、`USE_SD` 开 SD 存档、`UI_SWEEP` 开机自检（12 屏 + 三种照顾动作）、`BTN_AUTO_POLARITY`/`BTN_DEBUG` 等
 
 ### 运行期（WiFi 页面）

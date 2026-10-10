@@ -20,6 +20,7 @@
 #include "game.h"
 #include "cnfont.h"
 #include "settings.h"
+#include "splash.h"      // the boot picture pushed before the UI owns the panel
 #include "careaction.h"   // feed / wash / medicine: animation -> stat -> face
 
 #if USE_SD
@@ -136,6 +137,10 @@ void setup() {
   tft.init();
   tft.setRotation(SCR_ROTATION);
   tft.fillScreen(COL_BG);
+
+  // The boot picture (see splash.cpp): pushed while the panel is still ours,
+  // then painted over by the first welcome() redraw below.
+  splashShow(&tft);
 
   if (!eyes.begin(&tft)) {
     tft.fillScreen(COL_BAD);

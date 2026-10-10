@@ -20,6 +20,20 @@ static const char* const PHRASES[PHRASE_MAX] = {
   "今天也要开心", "我会乖乖的", "早点休息",  "晚安啦"
 };
 
+// Built-in welcome ("boot") screen greetings, shown as the second line of the
+// welcome screen (see app_lvgl.cpp welcome()). Same reasoning as PHRASES above:
+// they must stay string literals so tools/gen_lvgl_font.ps1 bakes every glyph
+// into lv_font_cn - a sentence typed at runtime could never be drawn. Index 0 is
+// "off": the welcome screen then shows the firmware version instead.
+static const char* const BOOT_LINES[BOOT_LINE_MAX] = {
+  "",               // 0 = 关闭（显示版本号）
+  "欢迎回来",
+  "你好呀",
+  "今天也要开心",
+  "我来陪你啦",
+  "么么哒"
+};
+
 PetCfg cfg;
 static Preferences s_prefs;
 
@@ -34,6 +48,8 @@ void settingsDefaults() {
   cfg.exprMaxMs = 15000UL;
   cfg.growthPct = 100;         // normal growth speed
   for (int i = 0; i < PHRASE_MAX; i++) cfg.phraseOn[i] = (i < 4) ? 1 : 0;
+  cfg.bootTitle[0] = 0;        // keep FW_NAME on the welcome screen
+  cfg.bootLine = 0;            // keep the version line -> factory look
 }
 
 void settingsBegin() {
@@ -48,6 +64,9 @@ void settingsBegin() {
   cfg.growthPct = (uint16_t)s_prefs.getUShort("growth", cfg.growthPct);
   // guard: getBytes() on a missing key logs an NVS error, so only read when set
   if (s_prefs.isKey("phOn")) s_prefs.getBytes("phOn", cfg.phraseOn, sizeof(cfg.phraseOn));
+  // getString() also reads through getBytes(), so guard it the same way
+  if (s_prefs.isKey("bootTitle")) s_prefs.getString("bootTitle", cfg.bootTitle, sizeof(cfg.bootTitle));
+  if (s_prefs.isKey("bootLine"))  cfg.bootLine = s_prefs.getUChar("bootLine", cfg.bootLine);
   s_prefs.end();
 
   // sanitise whatever came back (a corrupt blob must not brick the pet)
@@ -57,6 +76,8 @@ void settingsBegin() {
   cfg.exprMaxMs = clampU32(cfg.exprMaxMs, cfg.exprMinMs, 600000UL);
   if (cfg.growthPct < 20)  cfg.growthPct = 20;
   if (cfg.growthPct > 400) cfg.growthPct = 400;
+  cfg.bootTitle[sizeof(cfg.bootTitle) - 1] = 0;      // must stay terminated
+  if (cfg.bootLine >= BOOT_LINE_MAX) cfg.bootLine = 0;
 }
 
 void settingsSave() {
@@ -67,6 +88,8 @@ void settingsSave() {
   s_prefs.putUInt("exprMax", cfg.exprMaxMs);
   s_prefs.putUShort("growth", cfg.growthPct);
   s_prefs.putBytes("phOn", cfg.phraseOn, sizeof(cfg.phraseOn));
+  s_prefs.putString("bootTitle", cfg.bootTitle);
+  s_prefs.putUChar("bootLine", cfg.bootLine);
   s_prefs.end();
 }
 
@@ -99,4 +122,9 @@ void settingsPickPhrase(char* out, unsigned n) {
       return;
     }
   }
+}
+
+int         settingsBootLineCount() { return BOOT_LINE_MAX; }
+const char* settingsBootLine(int i) {
+  return (i >= 0 && i < BOOT_LINE_MAX) ? BOOT_LINES[i] : "";
 }

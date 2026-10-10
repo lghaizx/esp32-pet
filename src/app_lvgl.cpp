@@ -54,6 +54,7 @@
 #include "cnfont.h"      // CN_GLYPH_W / CN_GLYPH_H: the CJK font cell size
 #include "lv_font_cn.h"
 #include "lv_port.h"
+#include "splash.h"     // the boot picture pushed before LVGL owns the panel
 #include "uistyle.h"     // design tokens: colours / radii / rhythm / type scale
 #include "careaction.h"  // feed / wash / medicine: animation -> stat -> face
 
@@ -172,6 +173,8 @@ static lv_obj_t* faceStatus   = nullptr;   // status word (top right)
 static lv_obj_t* statBar[5]   = { nullptr };
 static lv_obj_t* sleepEnergy  = nullptr;
 static lv_obj_t* welcomeHint  = nullptr;
+static lv_obj_t* welcomeTitle = nullptr;   // line 1: cfg.bootTitle / FW_NAME
+static lv_obj_t* welcomeSub   = nullptr;   // line 2: greeting / "vX.Y.Z"
 
 // info pages: a title plus a pool of 12 rows that are filled in on entry. A
 // *data* page uses a row as "dim label (left) + bright value (right)"; a
@@ -536,11 +539,13 @@ static void buildWelcome() {
   lv_obj_t* s = scr[SCR_WELCOME] = mkScreen(COL_BG);
   faceView[SCR_WELCOME] = mkFaceView(s);
 
-  lv_obj_t* t = mkLabel(s, 0, STATUS_Y + 8, SCR_W, COL_ACCENT, LV_TEXT_ALIGN_CENTER);
-  setLabel(t, FW_NAME, COL_ACCENT);
+  // The two welcome lines are (re)filled from the user settings in welcome(),
+  // so whatever the phone edits on the web page is what greets at the next boot.
+  welcomeTitle = mkLabel(s, 0, STATUS_Y + 8, SCR_W, COL_ACCENT, LV_TEXT_ALIGN_CENTER);
+  setLabel(welcomeTitle, FW_NAME, COL_ACCENT);
   mkHair(s, SCR_W / 2 - 22, STATUS_Y + 24, 44, COL_ACCENT);   // short underline
-  lv_obj_t* v = mkLabel(s, 0, STATUS_Y + 26, SCR_W, COL_DIM, LV_TEXT_ALIGN_CENTER);
-  setLabel(v, "v" FW_VERSION, COL_DIM);
+  welcomeSub = mkLabel(s, 0, STATUS_Y + 26, SCR_W, COL_DIM, LV_TEXT_ALIGN_CENTER);
+  setLabel(welcomeSub, "v" FW_VERSION, COL_DIM);
 
   // the hint sits in a chip, so it reads like a button and not like a sentence;
   // a slow breath makes it the one thing the eye is drawn to on this screen
@@ -1148,6 +1153,23 @@ static void menuAction(int sel) {
 static void welcome() {
   welcomeStage = 0;
   welcomeMs    = millis();
+  // Boot screen text comes from the user settings (edited over WiFi, see
+  // netconfig.cpp): line 1 is the ASCII title or the firmware name, line 2 is a
+  // built-in greeting or - when none is picked - the firmware version.
+  setLabel(welcomeTitle, cfg.bootTitle[0] ? cfg.bootTitle : FW_NAME, COL_ACCENT);
+  const char* greet = settingsBootLine(cfg.bootLine);
+  if (greet && greet[0]) {
+    setLabel(welcomeSub, greet, COL_TEXT);
+  } else {
+    char vb[12];
+    snprintf(vb, sizeof vb, "v%s", FW_VERSION);
+    setLabel(welcomeSub, vb, COL_DIM);
+  }
+  // Same style as the other [ui] start-up lines: it is the only way to tell
+  // "the text was saved but the screen is fine" from "nothing was applied".
+  Serial.printf("[ui] welcome title=\"%s\" bootLine=%u line2=\"%s\"\n",
+                cfg.bootTitle[0] ? cfg.bootTitle : FW_NAME, (unsigned)cfg.bootLine,
+                (greet && greet[0]) ? greet : "v" FW_VERSION);
   setScreen(SCR_WELCOME);
   eyes.setBaseMood(MOOD_SLEEPY);
   eyes.draw();
@@ -1376,6 +1398,11 @@ void setup() {
   tft.fillScreen(COL_BG);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(TFT_WHITE, COL_BG);
+
+  // The boot picture: drawn with TFT_eSPI while the panel is still ours, held
+  // for SPLASH_MS, and then painted over by the first LVGL flush (the welcome
+  // screen). See splash.cpp / tools/gen_splash.ps1.
+  splashShow(&tft);
 
   if (!eyes.begin(&tft)) {
     tft.fillScreen(COL_BAD);
