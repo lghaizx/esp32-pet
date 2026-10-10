@@ -11,7 +11,7 @@
 输入   : 6 个按键
 传感   : 光敏(LDR) + 热敏电阻(NTC)
 ```
-
+创客 esp32  https://v.douyin.com/iMCyxXh0x3M/ 复制此链接，打开Dou音搜索，直接观看视频！
 ---
 
 ## 功能一览
